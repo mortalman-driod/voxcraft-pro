@@ -98,6 +98,10 @@ if 'pron_dict' not in D: D.pron_dict = {}
 if 'characters' not in D: D.characters = {'Narrator':'en-US-AndrewNeural'}
 if 'bg_music_path' not in D: D.bg_music_path = None
 if 'mixed_audio' not in D: D.mixed_audio = None
+if 'el_api_key' not in D: D.el_api_key = ""
+if 'el_voices' not in D: D.el_voices = []
+if 'el_clone_id' not in D: D.el_clone_id = None
+if 'el_clone_name' not in D: D.el_clone_name = ""
 
 VL = list(VOICES.keys())
 os.makedirs("workspace", exist_ok=True)
@@ -173,7 +177,7 @@ with st.sidebar:
         st.audio(p)
 
 # ── Tabs ──
-tab1,tab2,tab3,tab4,tab5,tab6 = st.tabs(["📝 Script","🎤 Voice Studio","⚡ Generate","🎵 Music Mix","🔊 Preview","📤 Export"])
+tab1,tab2,tab3,tab4,tab5,tab6,tab7 = st.tabs(["📝 Script","🎤 Voice Studio","⚡ Generate","🎵 Music Mix","🔊 Preview","📤 Export","🔮 Clone Studio"])
 
 # ═══ TAB 1: SCRIPT EDITOR ═══
 with tab1:
@@ -475,5 +479,139 @@ with tab6:
         st.markdown('<div class="status-info">⏳ Generate your voiceover first.</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
+# ═══ TAB 7: ELEVENLABS CLONE STUDIO ═══
+with tab7:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown('<p class="card-header">🔮 ElevenLabs Clone Studio</p>', unsafe_allow_html=True)
+    st.markdown("Clone your voice or browse 1000+ voices including **Nigerian English** and **African accent** voices — all powered by ElevenLabs.")
+
+    # API Key setup
+    el_key_input = st.text_input("ElevenLabs API Key", value=D.el_api_key,
+                                  type="password", placeholder="Paste your free API key from elevenlabs.io",
+                                  help="Free at elevenlabs.io — 10,000 chars/month")
+    kc1, kc2 = st.columns([3, 1])
+    with kc2:
+        if st.button("🔗 Connect", use_container_width=True):
+            if el_key_input.strip():
+                D.el_api_key = el_key_input.strip()
+                with st.spinner("Connecting..."):
+                    D.el_voices = el_get_voices(D.el_api_key)
+                used, limit = el_get_subscription(D.el_api_key)
+                if D.el_voices:
+                    st.success(f"✅ Connected! {len(D.el_voices)} voices loaded · {limit-used if used else '?'} chars remaining")
+                else:
+                    st.error("❌ Invalid API key or connection failed.")
+            else:
+                st.warning("Please enter your API key.")
+    with kc1:
+        st.markdown('<div class="status-info">Get a free key at <a href="https://elevenlabs.io" target="_blank" style="color:#FF6B35">elevenlabs.io</a> → Sign up → Profile → API Key</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if D.el_api_key and D.el_voices:
+        # Usage meter
+        used, limit = el_get_subscription(D.el_api_key)
+        if used is not None:
+            pct = min(int((used/limit)*100), 100)
+            remaining = limit - used
+            col_u1, col_u2, col_u3 = st.columns(3)
+            with col_u1: st.markdown(f'<div class="card-sm"><div class="card-header">Characters Used</div><span style="font-size:22px;font-weight:700;color:#E8E8E8">{used:,}</span></div>', unsafe_allow_html=True)
+            with col_u2: st.markdown(f'<div class="card-sm"><div class="card-header">Monthly Limit</div><span style="font-size:22px;font-weight:700;color:#E8E8E8">{limit:,}</span></div>', unsafe_allow_html=True)
+            with col_u3: st.markdown(f'<div class="card-sm"><div class="card-header">Remaining</div><span style="font-size:22px;font-weight:700;color:{"#4ADE80" if remaining > 2000 else "#FF6B35"}">{remaining:,}</span></div>', unsafe_allow_html=True)
+
+        st.markdown("---")
+
+        # ── Section 1: Voice Cloning ──────────────────────────────
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown('<p class="card-header">🎙️ Instant Voice Clone</p>', unsafe_allow_html=True)
+        st.markdown("Record yourself speaking **30–60 seconds** of clear audio (Pidgin, English, anything) and VoxCraft will clone your voice.")
+
+        clone_audio = st.file_uploader("Upload voice recording (WAV or MP3, 30–60s recommended)",
+                                       type=["wav","mp3","m4a","ogg"], key="clone_upload")
+        clone_name = st.text_input("Name your voice", placeholder="e.g. My Pidgin Voice", key="clone_nm")
+        vc1, vc2 = st.columns(2)
+        with vc1:
+            if st.button("🔮 Clone My Voice", use_container_width=True):
+                if clone_audio and clone_name.strip():
+                    clone_path = f"workspace/clone_upload.{clone_audio.name.split('.')[-1]}"
+                    with open(clone_path, "wb") as f: f.write(clone_audio.read())
+                    with st.spinner("Cloning voice... (10–30s)"):
+                        vid = el_clone_voice(D.el_api_key, clone_name.strip(), clone_path)
+                    if vid:
+                        D.el_clone_id = vid
+                        D.el_clone_name = clone_name.strip()
+                        # Refresh voice list
+                        D.el_voices = el_get_voices(D.el_api_key)
+                        st.success(f"✅ Voice '{clone_name}' cloned! Voice ID: {vid}")
+                    else:
+                        st.error("❌ Cloning failed. Check your API key or file format.")
+                else:
+                    st.warning("Upload an audio file and give your voice a name.")
+        with vc2:
+            if D.el_clone_id and st.button("🗑️ Delete Clone", use_container_width=True):
+                el_delete_voice(D.el_api_key, D.el_clone_id)
+                D.el_clone_id = None; D.el_clone_name = ""
+                D.el_voices = el_get_voices(D.el_api_key)
+                st.success("Deleted.")
+
+        if D.el_clone_id:
+            st.markdown(f'<div class="status-info">🟢 Active clone: <b>{D.el_clone_name}</b> · ID: <code>{D.el_clone_id}</code></div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # ── Section 2: Voice Browser ──────────────────────────────
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown('<p class="card-header">🎤 Voice Browser</p>', unsafe_allow_html=True)
+        categories = sorted(set(v["category"] for v in D.el_voices))
+        cat_filter = st.selectbox("Filter by category", ["All"] + categories)
+        search = st.text_input("Search voice name", placeholder="e.g. Nigerian, Pidgin, African...")
+        filtered_voices = D.el_voices
+        if cat_filter != "All": filtered_voices = [v for v in filtered_voices if v["category"] == cat_filter]
+        if search.strip(): filtered_voices = [v for v in filtered_voices if search.lower() in v["name"].lower()]
+        st.markdown(f"<p style='color:#555;font-size:12px'>{len(filtered_voices)} voices</p>", unsafe_allow_html=True)
+        vcols = st.columns(3)
+        for i, voice in enumerate(filtered_voices[:30]):
+            with vcols[i % 3]:
+                badge = "🟠" if voice["category"] == "cloned" else "🔵"
+                st.markdown(f'<div class="card-sm"><b style="color:#E8E8E8;font-size:13px">{badge} {voice["name"]}</b><br><span style="color:#555;font-size:11px">{voice["category"]}</span></div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # ── Section 3: Generate with ElevenLabs ──────────────────
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown('<p class="card-header">⚡ Generate with ElevenLabs</p>', unsafe_allow_html=True)
+        voice_options = {v["name"]: v["voice_id"] for v in D.el_voices}
+        # Put cloned voice first if exists
+        if D.el_clone_name and D.el_clone_name in voice_options:
+            voice_options = {D.el_clone_name: voice_options[D.el_clone_name], **{k:v for k,v in voice_options.items() if k != D.el_clone_name}}
+        el_voice_label = st.selectbox("Select Voice", list(voice_options.keys()), key="el_sel")
+        el_text = st.text_area("Text to generate", height=120, placeholder="Type your Pidgin or English script here...", key="el_txt")
+        elc1, elc2 = st.columns(2)
+        with elc1: el_stability = st.slider("Stability", 0.0, 1.0, 0.5, 0.05, help="Higher = more consistent, Lower = more expressive")
+        with elc2: el_similarity = st.slider("Clarity / Similarity", 0.0, 1.0, 0.8, 0.05, help="How closely to match the cloned voice")
+        el_model = st.selectbox("Model", ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_monolingual_v1"],
+                                 help="multilingual_v2 = best quality · turbo_v2_5 = fastest")
+
+        if st.button("⚡ Generate with ElevenLabs", use_container_width=True):
+            if el_text.strip():
+                el_out = "workspace/elevenlabs_output.mp3"
+                with st.spinner("Generating..."):
+                    ok = el_generate_tts(D.el_api_key, voice_options[el_voice_label],
+                                         el_text.strip(), el_out, el_model, el_stability, el_similarity)
+                if ok and os.path.exists(el_out):
+                    st.audio(el_out)
+                    dur = get_audio_duration(el_out)
+                    st.success(f"✅ Generated {dur:.1f}s of audio with '{el_voice_label}'")
+                    with open(el_out, "rb") as f:
+                        st.download_button("⬇️ Download", f, file_name="elevenlabs_output.mp3", mime="audio/mpeg")
+                    # Option to set as main audio
+                    if st.button("📌 Use as Main Voiceover"):
+                        D.full_audio = el_out
+                        st.success("Set as main voiceover! Go to Preview tab.")
+                else:
+                    st.error("❌ Generation failed. Check your character limit or API key.")
+            else:
+                st.warning("Enter some text first.")
+        st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="status-info">🔑 Connect your ElevenLabs API key above to get started.</div>', unsafe_allow_html=True)
+
 st.markdown("---")
-st.markdown('<div style="text-align:center;padding:12px;color:#4444aa;font-size:11px"><b style="color:#7c5cfc">VoxCraft Pro</b> · Free AI Voice Over Agent · 60+ Voices · 15 Languages · No API Keys</div>', unsafe_allow_html=True)
+st.markdown('<div style="text-align:center;padding:12px;color:#444;font-size:11px"><b style="color:#FF6B35">VoxCraft Studio</b> · Edge TTS + ElevenLabs · 70+ Voices · 15 Languages · Clone Studio</div>', unsafe_allow_html=True)
