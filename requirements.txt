@@ -3,3 +3,5 @@ edge-tts
 imageio-ffmpeg
 matplotlib
 numpy
+requests
+elevenlabs
