@@ -1,8 +1,5 @@
 streamlit
-ffmpeg-python
-pydub
-numpy
-scipy
-httpx
 edge-tts
-asyncio
+imageio-ffmpeg
+matplotlib
+numpy
