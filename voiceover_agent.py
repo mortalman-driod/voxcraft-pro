@@ -3,22 +3,89 @@ import os, asyncio, io, zipfile, json
 import edge_tts
 from voxcraft_utils import *
 
-st.set_page_config(page_title="VoxCraft Pro", page_icon="🎙️", layout="wide")
+st.set_page_config(page_title="VoxCraft Studio", page_icon="🎙️", layout="wide")
 st.markdown("""<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-*{font-family:'Inter',sans-serif}
-.stApp{background:linear-gradient(160deg,#0a0a1a,#0d0d2b,#0a0a1a)}
-h1,h2,h3{color:#f0f0ff !important}
-.block-container{max-width:1200px}
-div[data-testid="stSidebar"]{background:linear-gradient(180deg,#0e0e24,#080818);border-right:1px solid #1a1a3a}
-.stButton>button{background:linear-gradient(135deg,#7c5cfc,#5a3fd4);color:#fff;border:none;border-radius:10px;font-weight:600;padding:10px 24px;transition:all .3s}
-.stButton>button:hover{transform:translateY(-2px);box-shadow:0 8px 25px rgba(124,92,252,.4)}
-.glass{background:rgba(16,16,40,.7);backdrop-filter:blur(12px);border:1px solid rgba(124,92,252,.15);border-radius:16px;padding:20px;margin-bottom:16px}
-.seg-h{background:linear-gradient(135deg,rgba(124,92,252,.1),rgba(90,63,212,.05));border:1px solid rgba(124,92,252,.2);border-radius:12px;padding:14px;margin-bottom:10px}
-.mbox{background:rgba(124,92,252,.08);border:1px solid rgba(124,92,252,.15);border-radius:10px;padding:12px;text-align:center}
-.mbox h3{font-size:24px !important;margin:0 !important;color:#7c5cfc !important}
-.mbox p{font-size:11px;color:#6666aa;margin:0}
-.sbar{background:rgba(20,20,50,.8);border:1px solid #1a1a3a;border-radius:10px;padding:12px 16px;font-size:13px;color:#7c7cbb}
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap');
+
+/* ── Reset & Base ── */
+*,*::before,*::after{box-sizing:border-box;font-family:'Inter',sans-serif!important}
+html,body,.stApp{background:#0D0D0D!important;color:#E8E8E8!important}
+
+/* ── Hide Streamlit chrome ── */
+#MainMenu,footer,[data-testid="stToolbar"]{display:none!important}
+
+/* ── Main container ── */
+.block-container{max-width:1280px!important;padding:0 2rem!important}
+
+/* ── Sidebar ── */
+div[data-testid="stSidebar"]{background:#111111!important;border-right:1px solid #222222!important;padding-top:1rem}
+div[data-testid="stSidebar"] .stMarkdown p{color:#888!important;font-size:11px!important;text-transform:uppercase;letter-spacing:.08em;font-weight:600}
+div[data-testid="stSidebar"] label{color:#aaa!important;font-size:13px!important}
+div[data-testid="stSidebar"] .stSelectbox>div>div{background:#1A1A1A!important;border:1px solid #2A2A2A!important;color:#E8E8E8!important;border-radius:8px!important}
+div[data-testid="stSidebar"] .stSlider [data-baseweb="slider"]{padding:0}
+
+/* ── Inputs ── */
+.stTextArea textarea,.stTextInput input{
+  background:#1A1A1A!important;border:1px solid #2A2A2A!important;
+  color:#E8E8E8!important;border-radius:8px!important;font-size:14px!important;
+  transition:border-color .2s}
+.stTextArea textarea:focus,.stTextInput input:focus{border-color:#FF6B35!important;box-shadow:0 0 0 2px rgba(255,107,53,.15)!important;outline:none}
+.stSelectbox>div>div{background:#1A1A1A!important;border:1px solid #2A2A2A!important;color:#E8E8E8!important;border-radius:8px!important}
+
+/* ── Buttons ── */
+.stButton>button{
+  background:#FF6B35!important;color:#fff!important;border:none!important;
+  border-radius:8px!important;font-weight:600!important;font-size:13px!important;
+  padding:10px 20px!important;transition:all .2s!important;letter-spacing:.01em}
+.stButton>button:hover{background:#E55A27!important;box-shadow:0 4px 16px rgba(255,107,53,.35)!important;transform:translateY(-1px)!important}
+.stButton>button:active{transform:translateY(0)!important}
+
+/* ── Tabs ── */
+.stTabs [data-baseweb="tab-list"]{background:#111!important;border-bottom:1px solid #222!important;gap:0;padding:0}
+.stTabs [data-baseweb="tab"]{
+  background:transparent!important;color:#666!important;border:none!important;
+  border-bottom:2px solid transparent!important;padding:12px 20px!important;
+  font-size:13px!important;font-weight:500!important;transition:all .2s;margin:0}
+.stTabs [aria-selected="true"]{
+  color:#FF6B35!important;border-bottom:2px solid #FF6B35!important;background:transparent!important}
+.stTabs [data-baseweb="tab-panel"]{padding:24px 0!important}
+
+/* ── Cards ── */
+.card{background:#161616;border:1px solid #222;border-radius:12px;padding:24px;margin-bottom:16px}
+.card-sm{background:#161616;border:1px solid #222;border-radius:10px;padding:16px;margin-bottom:12px}
+.card-header{font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.08em;margin-bottom:16px}
+.card h3{font-size:16px!important;font-weight:600!important;color:#E8E8E8!important;margin:0 0 4px!important}
+
+/* ── Segment row ── */
+.seg-row{background:#161616;border:1px solid #222;border-radius:10px;padding:16px;margin-bottom:10px;transition:border-color .2s}
+.seg-row:hover{border-color:#333}
+.seg-num{font-size:11px;font-weight:700;color:#FF6B35;letter-spacing:.05em;margin-bottom:8px}
+.seg-meta{font-size:11px;color:#555;margin-left:8px}
+
+/* ── Metric pills ── */
+.pill{display:inline-flex;align-items:center;gap:6px;background:#1A1A1A;border:1px solid #2A2A2A;border-radius:20px;padding:6px 14px;font-size:12px;color:#888}
+.pill-val{font-size:16px;font-weight:700;color:#E8E8E8;margin-right:2px}
+.pill-accent{color:#FF6B35!important}
+
+/* ── Status banner ── */
+.status-info{background:#1A1A1A;border:1px solid #2A2A2A;border-left:3px solid #FF6B35;border-radius:8px;padding:12px 16px;font-size:13px;color:#888}
+
+/* ── Checkbox, radio ── */
+.stCheckbox label{color:#aaa!important;font-size:13px!important}
+.stRadio label{color:#aaa!important;font-size:13px!important}
+
+/* ── Progress ── */
+.stProgress>div>div{background:#FF6B35!important;border-radius:4px!important}
+
+/* ── Expander ── */
+.streamlit-expanderHeader{background:#161616!important;border:1px solid #222!important;border-radius:8px!important;color:#aaa!important}
+.streamlit-expanderContent{background:#111!important;border:1px solid #222!important;border-top:none!important}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:#111}
+::-webkit-scrollbar-thumb{background:#2A2A2A;border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:#333}
 </style>""", unsafe_allow_html=True)
 
 # ── State ──
@@ -40,14 +107,20 @@ async def gen_audio(text, voice, rate, pitch, path):
     await c.save(path)
 
 # ── Header ──
-c1,c2=st.columns([3,1])
-with c1:
-    st.markdown("""<div style="display:flex;align-items:center;gap:12px"><span style="font-size:36px">🎙️</span>
-    <div><h1 style="margin:0;font-size:32px;background:linear-gradient(135deg,#7c5cfc,#b090ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent">VoxCraft Pro</h1>
-    <p style="color:#5555aa;font-size:13px;margin:0">Free AI Voice Over Agent · 60+ Neural Voices · 15 Languages · Zero Cost</p></div></div>""", unsafe_allow_html=True)
-with c2:
-    st.markdown('<div class="mbox" style="margin-top:12px"><h3 style="color:#44dd88 !important">100% FREE</h3><p>Neural TTS Engine</p></div>', unsafe_allow_html=True)
-st.markdown("---")
+st.markdown("""
+<div style="display:flex;align-items:center;justify-content:space-between;padding:20px 0 16px;border-bottom:1px solid #1E1E1E;margin-bottom:8px">
+  <div style="display:flex;align-items:center;gap:14px">
+    <div style="width:38px;height:38px;background:#FF6B35;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px">🎙️</div>
+    <div>
+      <h1 style="margin:0;font-size:22px;font-weight:700;color:#E8E8E8;letter-spacing:-.02em">VoxCraft Studio</h1>
+      <p style="margin:0;font-size:12px;color:#555">AI Voice Over · 60+ Neural Voices · 15 Languages</p>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:8px">
+    <span style="background:#1A1A1A;border:1px solid #2A2A2A;border-radius:20px;padding:5px 14px;font-size:12px;font-weight:600;color:#4ADE80">● 100% FREE</span>
+    <span style="background:#1A1A1A;border:1px solid #2A2A2A;border-radius:20px;padding:5px 14px;font-size:12px;color:#555">Edge Neural TTS</span>
+  </div>
+</div>""", unsafe_allow_html=True)
 
 # ── Sidebar ──
 with st.sidebar:
@@ -104,7 +177,7 @@ tab1,tab2,tab3,tab4,tab5,tab6 = st.tabs(["📝 Script","🎤 Voice Studio","⚡ 
 
 # ═══ TAB 1: SCRIPT EDITOR ═══
 with tab1:
-    st.markdown('<div class="glass">', unsafe_allow_html=True)
+    st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### ✍️ Script Editor")
     tc1,tc2 = st.columns([3,1])
     with tc1:
@@ -147,7 +220,7 @@ with tab1:
     for i, seg in enumerate(D.segments):
         wc = len(seg['text'].split()); ed = estimate_duration(seg['text'], seg['rate'])
         tw += wc; te += ed
-        st.markdown(f'<div class="seg-h"><span style="color:#7c5cfc;font-weight:600">Segment {i+1}</span> <span style="color:#4444aa;font-size:12px">· {wc} words · ~{ed:.1f}s · 🎭 {seg["char"]}</span></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="seg-row"><span style="color:#7c5cfc;font-weight:600">Segment {i+1}</span> <span style="color:#4444aa;font-size:12px">· {wc} words · ~{ed:.1f}s · 🎭 {seg["char"]}</span></div>', unsafe_allow_html=True)
         s1,s2 = st.columns([3,1])
         with s1:
             nt = st.text_area("Text", value=seg['text'], height=90, key=f"st_{i}", label_visibility="collapsed", placeholder="Enter narration...")
@@ -181,13 +254,13 @@ with tab1:
                     D.segments.pop(i); st.rerun()
     
     m1,m2,m3 = st.columns(3)
-    with m1: st.markdown(f'<div class="mbox"><h3>{len(D.segments)}</h3><p>Segments</p></div>', unsafe_allow_html=True)
-    with m2: st.markdown(f'<div class="mbox"><h3>{tw}</h3><p>Words</p></div>', unsafe_allow_html=True)
-    with m3: st.markdown(f'<div class="mbox"><h3>~{te:.0f}s</h3><p>Est. Duration</p></div>', unsafe_allow_html=True)
+    with m1: st.markdown(f'<div class="pill-box"><h3>{len(D.segments)}</h3><p>Segments</p></div>', unsafe_allow_html=True)
+    with m2: st.markdown(f'<div class="pill-box"><h3>{tw}</h3><p>Words</p></div>', unsafe_allow_html=True)
+    with m3: st.markdown(f'<div class="pill-box"><h3>~{te:.0f}s</h3><p>Est. Duration</p></div>', unsafe_allow_html=True)
 
 # ═══ TAB 2: VOICE STUDIO ═══
 with tab2:
-    st.markdown('<div class="glass">', unsafe_allow_html=True)
+    st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### 🎤 Voice A/B Comparison")
     st.markdown("Hear the same text in different voices to find your perfect match.")
     comp_text = st.text_input("Comparison text", value="The future belongs to those who believe in the beauty of their dreams.", key="comp_txt")
@@ -207,7 +280,7 @@ with tab2:
             st.audio(p)
     st.markdown('</div>', unsafe_allow_html=True)
     
-    st.markdown('<div class="glass">', unsafe_allow_html=True)
+    st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### 🌍 Voice Explorer")
     lang_filter = st.selectbox("Filter by Language", ["All","English","Spanish","French","Portuguese","German","Italian","Japanese","Chinese","Korean","Arabic","Hindi","Russian","Turkish","Dutch","Polish","Swedish"])
     lang_codes = {"English":"en","Spanish":"es","French":"fr","Portuguese":"pt","German":"de","Italian":"it","Japanese":"ja","Chinese":"zh","Korean":"ko","Arabic":"ar","Hindi":"hi","Russian":"ru","Turkish":"tr","Dutch":"nl","Polish":"pl","Swedish":"sv"}
@@ -215,12 +288,12 @@ with tab2:
     cols = st.columns(3)
     for i,(label,vid) in enumerate(filtered.items()):
         with cols[i%3]:
-            st.markdown(f'<div class="seg-h" style="padding:8px 12px"><b style="color:#b0a0ff;font-size:13px">{label}</b><br><code style="font-size:10px;color:#4444aa">{vid}</code></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="seg-row" style="padding:8px 12px"><b style="color:#b0a0ff;font-size:13px">{label}</b><br><code style="font-size:10px;color:#4444aa">{vid}</code></div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ═══ TAB 3: GENERATE ═══
 with tab3:
-    st.markdown('<div class="glass">', unsafe_allow_html=True)
+    st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### ⚡ Generate Voice Over")
     do_normalize = st.checkbox("🔊 Normalize audio levels", value=True)
     gc1,gc2 = st.columns(2)
@@ -278,7 +351,7 @@ with tab3:
 
 # ═══ TAB 4: MUSIC MIX ═══
 with tab4:
-    st.markdown('<div class="glass">', unsafe_allow_html=True)
+    st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### 🎵 Background Music Mixer")
     if D.full_audio and os.path.exists(D.full_audio):
         mc1,mc2,mc3 = st.columns(3)
@@ -304,12 +377,12 @@ with tab4:
                 st.audio(mixed)
                 st.success("🎉 Mixed audio ready!")
     else:
-        st.markdown('<div class="sbar">⏳ Generate your voiceover first (Tab 3), then come here to add background music.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="status-info">⏳ Generate your voiceover first (Tab 3), then come here to add background music.</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ═══ TAB 5: PREVIEW ═══
 with tab5:
-    st.markdown('<div class="glass">', unsafe_allow_html=True)
+    st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### 🔊 Preview & Waveform")
     # Full audio
     final = D.mixed_audio if D.mixed_audio and os.path.exists(str(D.mixed_audio or '')) else D.full_audio
@@ -332,11 +405,11 @@ with tab5:
                     try: st.image(make_waveform(path), use_container_width=True)
                     except: pass
     else:
-        st.markdown('<div class="sbar">⏳ No audio yet. Generate in Tab 3.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="status-info">⏳ No audio yet. Generate in Tab 3.</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
     # Video timeline
-    st.markdown('<div class="glass">', unsafe_allow_html=True)
+    st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### 🎬 Video Timeline Sync")
     video_file = st.file_uploader("Upload your video to sync", type=["mp4","mov","avi","mkv"])
     if video_file and D.segments_meta:
@@ -363,7 +436,7 @@ with tab5:
 
 # ═══ TAB 6: EXPORT ═══
 with tab6:
-    st.markdown('<div class="glass">', unsafe_allow_html=True)
+    st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### 📤 Export")
     final_audio = D.mixed_audio if D.mixed_audio and os.path.exists(str(D.mixed_audio or '')) else D.full_audio
     if final_audio and os.path.exists(final_audio):
@@ -397,9 +470,9 @@ with tab6:
                             st.download_button("⬇️ Download MP4", f, file_name="VoxCraft_video.mp4", mime="video/mp4", use_container_width=True)
                         st.success("✅ Video exported!")
         st.markdown('---')
-        st.markdown('<div class="sbar">💡 Import the SRT into Premiere Pro, DaVinci Resolve, or CapCut for auto-synced subtitles.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="status-info">💡 Import the SRT into Premiere Pro, DaVinci Resolve, or CapCut for auto-synced subtitles.</div>', unsafe_allow_html=True)
     else:
-        st.markdown('<div class="sbar">⏳ Generate your voiceover first.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="status-info">⏳ Generate your voiceover first.</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown("---")
