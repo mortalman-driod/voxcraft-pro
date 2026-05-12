@@ -255,6 +255,85 @@ VOICES = {
     "🇸🇪 Sofie (Swedish F)": "sv-SE-SofieNeural",
 }
 
+# ── ElevenLabs Integration ──────────────────────────────────────────────────
+EL_BASE = "https://api.elevenlabs.io/v1"
+
+def el_headers(api_key):
+    return {"xi-api-key": api_key, "Accept": "application/json"}
+
+def el_get_voices(api_key):
+    """Return list of {voice_id, name, category, preview_url} dicts."""
+    try:
+        import requests, warnings; warnings.filterwarnings("ignore")
+        r = requests.get(f"{EL_BASE}/voices", headers=el_headers(api_key), verify=False, timeout=15)
+        if r.status_code == 200:
+            voices = r.json().get("voices", [])
+            return [{"voice_id": v["voice_id"], "name": v["name"],
+                     "category": v.get("category","premade"),
+                     "preview_url": v.get("preview_url","")} for v in voices]
+        return []
+    except Exception:
+        return []
+
+def el_get_subscription(api_key):
+    """Return remaining character count for the free tier."""
+    try:
+        import requests, warnings; warnings.filterwarnings("ignore")
+        r = requests.get(f"{EL_BASE}/user/subscription", headers=el_headers(api_key), verify=False, timeout=15)
+        if r.status_code == 200:
+            d = r.json()
+            used = d.get("character_count", 0)
+            limit = d.get("character_limit", 10000)
+            return used, limit
+        return None, None
+    except Exception:
+        return None, None
+
+def el_clone_voice(api_key, name, audio_path, description="Cloned via VoxCraft Studio"):
+    """Upload audio and create an Instant Voice Clone. Returns voice_id or None."""
+    try:
+        import requests, warnings; warnings.filterwarnings("ignore")
+        with open(audio_path, "rb") as f:
+            files = [("files", (os.path.basename(audio_path), f, "audio/mpeg"))]
+            data = {"name": name, "description": description}
+            r = requests.post(f"{EL_BASE}/voices/add",
+                              headers={"xi-api-key": api_key},
+                              data=data, files=files, verify=False, timeout=60)
+        if r.status_code == 200:
+            return r.json().get("voice_id")
+        return None
+    except Exception as e:
+        return None
+
+def el_delete_voice(api_key, voice_id):
+    try:
+        import requests, warnings; warnings.filterwarnings("ignore")
+        requests.delete(f"{EL_BASE}/voices/{voice_id}", headers=el_headers(api_key), verify=False, timeout=15)
+    except Exception:
+        pass
+
+def el_generate_tts(api_key, voice_id, text, output_path,
+                    model_id="eleven_multilingual_v2", stability=0.5, similarity=0.8):
+    """Generate TTS via ElevenLabs and save to output_path. Returns True on success."""
+    try:
+        import requests, warnings; warnings.filterwarnings("ignore")
+        payload = {
+            "text": text,
+            "model_id": model_id,
+            "voice_settings": {"stability": stability, "similarity_boost": similarity}
+        }
+        hdrs = {**el_headers(api_key), "Content-Type": "application/json"}
+        r = requests.post(f"{EL_BASE}/text-to-speech/{voice_id}",
+                          headers=hdrs, json=payload, verify=False, timeout=120, stream=True)
+        if r.status_code == 200:
+            with open(output_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=4096):
+                    if chunk:
+                        f.write(chunk)
+            return True
+        return False
+    except Exception:
+        return False
 TEMPLATES = {
     "YouTube Intro": "Hey everyone, welcome back to the channel!\n\nIn today's video, we're going to dive deep into something really exciting. I've been working on this for weeks, and I can't wait to share it with you.\n\nSo grab your coffee, sit back, and let's get into it.",
     "Documentary": "In the heart of an untamed wilderness, a story unfolds that has remained hidden for centuries.\n\nScientists have long debated the origins of this phenomenon. But recent discoveries have shattered everything we thought we knew.\n\nWhat they found would change the course of history forever.",
