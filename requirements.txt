@@ -1,0 +1,8 @@
+streamlit
+ffmpeg-python
+pydub
+numpy
+scipy
+httpx
+edge-tts
+asyncio
