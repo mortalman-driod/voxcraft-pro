@@ -191,8 +191,18 @@ VOICES = {
     "🇮🇳 Neerja (Indian F)": "en-IN-NeerjaNeural",
     "🇨🇦 Clara (Canadian F)": "en-CA-ClaraNeural",
     "🇨🇦 Liam (Canadian M)": "en-CA-LiamNeural",
+    # Nigerian English (full set — Nigerian accent, best for Pidgin-adjacent content)
     "🇳🇬 Abeo (Nigerian M)": "en-NG-AbeoNeural",
     "🇳🇬 Ezinne (Nigerian F)": "en-NG-EzinneNeural",
+    # African English — Kenyan accent (closest available to West African accent family)
+    "🇰🇪 Chilemba (Kenyan M)": "en-KE-ChilembaNeural",
+    "🇰🇪 Asilia (Kenyan F)": "en-KE-AsiliaNeural",
+    # South African English
+    "🇿🇦 Luke (South African M)": "en-ZA-LukeNeural",
+    "🇿🇦 Leah (South African F)": "en-ZA-LeahNeural",
+    # Tanzanian English
+    "🇹🇿 Elimu (Tanzanian M)": "en-TZ-ElimuNeural",
+    "🇹🇿 Imani (Tanzanian F)": "en-TZ-ImaniNeural",
     # Spanish
     "🇪🇸 Alvaro (Spanish M)": "es-ES-AlvaroNeural",
     "🇪🇸 Elvira (Spanish F)": "es-ES-ElviraNeural",
