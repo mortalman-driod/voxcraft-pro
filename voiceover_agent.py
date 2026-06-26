@@ -3,6 +3,86 @@ import os, asyncio, io, zipfile, json
 import edge_tts
 from voxcraft_utils import *
 
+# --- LOCAL OFFLINE MODEL PATCHES ---
+import warnings
+warnings.filterwarnings("ignore")
+import transformers.utils.import_utils as import_utils
+if getattr(import_utils, 'is_torch_greater_or_equal', None) is None:
+    def is_torch_greater_or_equal(version): return True
+    import_utils.is_torch_greater_or_equal = is_torch_greater_or_equal
+
+import transformers.pytorch_utils as _pu
+if getattr(_pu, 'isin_mps_friendly', None) is None:
+    import torch
+    _pu.isin_mps_friendly = getattr(torch, 'isin', None)
+
+import transformers.generation.utils as gen_utils
+def mock_validate_model_class(self): pass
+gen_utils.GenerationMixin._validate_model_class = mock_validate_model_class
+
+import torch
+import functools
+_original_load = torch.load
+@functools.wraps(_original_load)
+def patched_load(*args, **kwargs):
+    kwargs["weights_only"] = False
+    return _original_load(*args, **kwargs)
+torch.load = patched_load
+
+import torchaudio
+import soundfile as sf
+def custom_audio_load(filepath, *args, **kwargs):
+    data, samplerate = sf.read(filepath)
+    tensor = torch.from_numpy(data).float()
+    if tensor.ndim == 1:
+        tensor = tensor.unsqueeze(0)
+    else:
+        tensor = tensor.t()
+    return tensor, samplerate
+torchaudio.load = custom_audio_load
+
+try:
+    from TTS.tts.layers.xtts.gpt import GPT2InferenceModel
+    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, inputs_embeds=None, **kwargs):
+        token_type_ids = kwargs.get("token_type_ids", None)
+        if past_key_values:
+            input_ids = input_ids[:, -1].unsqueeze(-1)
+            if token_type_ids is not None:
+                token_type_ids = token_type_ids[:, -1].unsqueeze(-1)
+        attention_mask = kwargs.get("attention_mask", None)
+        position_ids = kwargs.get("position_ids", None)
+        if attention_mask is not None and position_ids is None:
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
+            if past_key_values:
+                position_ids = position_ids[:, -1].unsqueeze(-1)
+        else:
+            position_ids = None
+        if inputs_embeds is not None and past_key_values is None:
+            model_inputs = {"inputs_embeds": inputs_embeds}
+        else:
+            model_inputs = {"input_ids": input_ids}
+        model_inputs.update({"past_key_values": past_key_values, "use_cache": kwargs.get("use_cache"), "position_ids": position_ids, "attention_mask": attention_mask, "token_type_ids": token_type_ids})
+        return model_inputs
+    GPT2InferenceModel.prepare_inputs_for_generation = prepare_inputs_for_generation
+except ImportError:
+    pass
+
+@st.cache_resource
+def load_xtts_model():
+    from TTS.api import TTS
+    os.environ["COQUI_TOS_AGREED"] = "1"
+    tts = TTS(model_path="workspace/XTTS-v2", config_path="workspace/XTTS-v2/config.json")
+    from transformers.generation.configuration_utils import GenerationConfig
+    if getattr(tts.synthesizer.tts_model.gpt.gpt_inference, "generation_config", None) is None:
+        tts.synthesizer.tts_model.gpt.gpt_inference.generation_config = GenerationConfig()
+        tts.synthesizer.tts_model.gpt.gpt_inference.generation_config.pad_token_id = 0
+        tts.synthesizer.tts_model.gpt.gpt_inference.generation_config.bos_token_id = 0
+        tts.synthesizer.tts_model.gpt.gpt_inference.generation_config.eos_token_id = 0
+    return tts
+# -----------------------------------
+
+
 st.set_page_config(page_title="VoxCraft Studio", page_icon="🎙️", layout="wide")
 st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap');
@@ -96,12 +176,9 @@ if 'full_audio' not in D: D.full_audio = None
 if 'segments_meta' not in D: D.segments_meta = []
 if 'pron_dict' not in D: D.pron_dict = {}
 if 'characters' not in D: D.characters = {'Narrator':'en-US-AndrewNeural'}
-if 'bg_music_path' not in D: D.bg_music_path = None
-if 'mixed_audio' not in D: D.mixed_audio = None
-if 'el_api_key' not in D: D.el_api_key = ""
-if 'el_voices' not in D: D.el_voices = []
-if 'el_clone_id' not in D: D.el_clone_id = None
-if 'el_clone_name' not in D: D.el_clone_name = ""
+
+if 'xtts_voice_ref' not in D: D.xtts_voice_ref = None
+if 'xtts_voice_name' not in D: D.xtts_voice_name = ""
 
 VL = list(VOICES.keys())
 os.makedirs("workspace", exist_ok=True)
@@ -177,7 +254,7 @@ with st.sidebar:
         st.audio(p)
 
 # ── Tabs ──
-tab1,tab2,tab3,tab4,tab5,tab6,tab7 = st.tabs(["📝 Script","🎤 Voice Studio","⚡ Generate","🎵 Music Mix","🔊 Preview","📤 Export","🔮 Clone Studio"])
+tab1,tab2,tab3,tab4,tab5,tab6 = st.tabs(["📝 Script","🎤 Voice Studio","⚡ Generate","🔊 Preview","📤 Export","🔮 Clone Studio"])
 
 # ═══ TAB 1: SCRIPT EDITOR ═══
 with tab1:
@@ -299,7 +376,6 @@ with tab2:
 with tab3:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### ⚡ Generate Voice Over")
-    do_normalize = st.checkbox("🔊 Normalize audio levels", value=True)
     gc1,gc2 = st.columns(2)
     with gc1: gen_ind = st.button("🎤 Generate All Segments", use_container_width=True)
     with gc2: gen_full = st.button("🎬 Generate & Stitch Full", use_container_width=True)
@@ -322,11 +398,6 @@ with tab3:
                     txt = apply_pronunciation(s['text'], D.pron_dict)
                     voice = D.characters.get(s.get('char',''), s['voice']) if s.get('char','') in D.characters else s['voice']
                     await gen_audio(txt, voice, s['rate'], s['pitch'], out_path)
-                    if do_normalize:
-                        norm_out = f"workspace/segment_{idx}_norm.mp3"
-                        normalize_audio(out_path, norm_out)
-                        if os.path.exists(norm_out) and os.path.getsize(norm_out) > 0:
-                            os.replace(norm_out, out_path)
                     dur = get_audio_duration(out_path)
                     return idx, out_path, dur, s['text']
 
@@ -353,43 +424,12 @@ with tab3:
             except Exception as e:
                 st.error(f"❌ Generation failed: {e}")
 
-# ═══ TAB 4: MUSIC MIX ═══
+# ═══ TAB 4: PREVIEW ═══
 with tab4:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown("### 🎵 Background Music Mixer")
-    if D.full_audio and os.path.exists(D.full_audio):
-        mc1,mc2,mc3 = st.columns(3)
-        with mc1:
-            music_style = st.selectbox("Music Style", ["cinematic","calm","energetic","mysterious","inspiring","ambient"])
-        with mc2:
-            music_vol = st.slider("Music Volume", 0.05, 0.5, 0.12, 0.01)
-        with mc3:
-            st.markdown("<br>", unsafe_allow_html=True)
-            gen_music = st.button("🎵 Generate & Mix", use_container_width=True)
-        
-        if gen_music:
-            with st.spinner("🎵 Generating ambient music..."):
-                dur = get_audio_duration(D.full_audio)
-                music_path = generate_ambient_music(dur, music_style)
-                D.bg_music_path = music_path
-                st.audio(music_path)
-                st.success("✅ Music generated!")
-            with st.spinner("🔀 Mixing voice + music..."):
-                mixed = f"workspace/mixed_output.{export_fmt}"
-                mix_audio_with_music(D.full_audio, music_path, mixed, music_vol)
-                D.mixed_audio = mixed
-                st.audio(mixed)
-                st.success("🎉 Mixed audio ready!")
-    else:
-        st.markdown('<div class="status-info">⏳ Generate your voiceover first (Tab 3), then come here to add background music.</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# ═══ TAB 5: PREVIEW ═══
-with tab5:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### 🔊 Preview & Waveform")
     # Full audio
-    final = D.mixed_audio if D.mixed_audio and os.path.exists(str(D.mixed_audio or '')) else D.full_audio
+    final = D.full_audio
     if final and os.path.exists(final):
         st.markdown("#### 🎬 Full Project")
         st.audio(final)
@@ -438,11 +478,11 @@ with tab5:
                     st.markdown(f'<div style="background:{colors[i%len(colors)]};border-radius:6px;padding:6px;text-align:center;font-size:10px;color:#fff">S{i+1}<br>{meta["duration"]:.1f}s</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ═══ TAB 6: EXPORT ═══
-with tab6:
+# ═══ TAB 5: EXPORT ═══
+with tab5:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### 📤 Export")
-    final_audio = D.mixed_audio if D.mixed_audio and os.path.exists(str(D.mixed_audio or '')) else D.full_audio
+    final_audio = D.full_audio
     if final_audio and os.path.exists(final_audio):
         e1,e2,e3,e4 = st.columns(4)
         with e1:
@@ -479,139 +519,80 @@ with tab6:
         st.markdown('<div class="status-info">⏳ Generate your voiceover first.</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ═══ TAB 7: ELEVENLABS CLONE STUDIO ═══
-with tab7:
+# ═══ TAB 6: LOCAL CLONE STUDIO ═══
+with tab6:
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown('<p class="card-header">🔮 ElevenLabs Clone Studio</p>', unsafe_allow_html=True)
-    st.markdown("Clone your voice or browse 1000+ voices including **Nigerian English** and **African accent** voices — all powered by ElevenLabs.")
+    st.markdown('<p class="card-header">🔮 Local Offline Clone Studio</p>', unsafe_allow_html=True)
+    st.markdown("Fully offline voice cloning powered by **Coqui XTTS v2** running securely on your own hardware. No cloud APIs. No character limits.")
 
-    # API Key setup
-    el_key_input = st.text_input("ElevenLabs API Key", value=D.el_api_key,
-                                  type="password", placeholder="Paste your free API key from elevenlabs.io",
-                                  help="Free at elevenlabs.io — 10,000 chars/month")
-    kc1, kc2 = st.columns([3, 1])
-    with kc2:
-        if st.button("🔗 Connect", use_container_width=True):
-            if el_key_input.strip():
-                D.el_api_key = el_key_input.strip()
-                with st.spinner("Connecting..."):
-                    D.el_voices = el_get_voices(D.el_api_key)
-                used, limit = el_get_subscription(D.el_api_key)
-                if D.el_voices:
-                    st.success(f"✅ Connected! {len(D.el_voices)} voices loaded · {limit-used if used else '?'} chars remaining")
-                else:
-                    st.error("❌ Invalid API key or connection failed.")
+    st.markdown("---")
+
+    # ── Section 1: Voice Cloning ──────────────────────────────
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown('<p class="card-header">🎙️ Upload Your Reference Voice</p>', unsafe_allow_html=True)
+    st.markdown("Provide a **10-15 second** clean audio file of the voice you want to clone (e.g. your Pidgin voice).")
+
+    clone_audio = st.file_uploader("Upload reference audio (WAV/MP3)", type=["wav","mp3","m4a","ogg"], key="clone_upload")
+    clone_name = st.text_input("Name this voice", placeholder="e.g. My Pidgin Voice", key="clone_nm")
+    
+    vc1, vc2 = st.columns(2)
+    with vc1:
+        if st.button("🔮 Save Voice Reference", use_container_width=True):
+            if clone_audio and clone_name.strip():
+                clone_path = f"workspace/xtts_reference.{clone_audio.name.split('.')[-1]}"
+                with open(clone_path, "wb") as f: f.write(clone_audio.read())
+                
+                D.xtts_voice_ref = clone_path
+                D.xtts_voice_name = clone_name.strip()
+                st.success(f"✅ Voice reference '{clone_name}' loaded locally!")
             else:
-                st.warning("Please enter your API key.")
-    with kc1:
-        st.markdown('<div class="status-info">Get a free key at <a href="https://elevenlabs.io" target="_blank" style="color:#FF6B35">elevenlabs.io</a> → Sign up → Profile → API Key</div>', unsafe_allow_html=True)
+                st.warning("Upload an audio file and give your voice a name.")
+    with vc2:
+        if D.xtts_voice_ref and st.button("🗑️ Clear Reference", use_container_width=True):
+            D.xtts_voice_ref = None
+            D.xtts_voice_name = ""
+            st.success("Cleared.")
+
+    if D.xtts_voice_ref:
+        st.markdown(f'<div class="status-info">🟢 Active Voice Profile: <b>{D.xtts_voice_name}</b></div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    if D.el_api_key and D.el_voices:
-        # Usage meter
-        used, limit = el_get_subscription(D.el_api_key)
-        if used is not None:
-            pct = min(int((used/limit)*100), 100)
-            remaining = limit - used
-            col_u1, col_u2, col_u3 = st.columns(3)
-            with col_u1: st.markdown(f'<div class="card-sm"><div class="card-header">Characters Used</div><span style="font-size:22px;font-weight:700;color:#E8E8E8">{used:,}</span></div>', unsafe_allow_html=True)
-            with col_u2: st.markdown(f'<div class="card-sm"><div class="card-header">Monthly Limit</div><span style="font-size:22px;font-weight:700;color:#E8E8E8">{limit:,}</span></div>', unsafe_allow_html=True)
-            with col_u3: st.markdown(f'<div class="card-sm"><div class="card-header">Remaining</div><span style="font-size:22px;font-weight:700;color:{"#4ADE80" if remaining > 2000 else "#FF6B35"}">{remaining:,}</span></div>', unsafe_allow_html=True)
-
-        st.markdown("---")
-
-        # ── Section 1: Voice Cloning ──────────────────────────────
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown('<p class="card-header">🎙️ Instant Voice Clone</p>', unsafe_allow_html=True)
-        st.markdown("Record yourself speaking **30–60 seconds** of clear audio (Pidgin, English, anything) and VoxCraft will clone your voice.")
-
-        clone_audio = st.file_uploader("Upload voice recording (WAV or MP3, 30–60s recommended)",
-                                       type=["wav","mp3","m4a","ogg"], key="clone_upload")
-        clone_name = st.text_input("Name your voice", placeholder="e.g. My Pidgin Voice", key="clone_nm")
-        vc1, vc2 = st.columns(2)
-        with vc1:
-            if st.button("🔮 Clone My Voice", use_container_width=True):
-                if clone_audio and clone_name.strip():
-                    clone_path = f"workspace/clone_upload.{clone_audio.name.split('.')[-1]}"
-                    with open(clone_path, "wb") as f: f.write(clone_audio.read())
-                    with st.spinner("Cloning voice... (10–30s)"):
-                        vid = el_clone_voice(D.el_api_key, clone_name.strip(), clone_path)
-                    if vid:
-                        D.el_clone_id = vid
-                        D.el_clone_name = clone_name.strip()
-                        # Refresh voice list
-                        D.el_voices = el_get_voices(D.el_api_key)
-                        st.success(f"✅ Voice '{clone_name}' cloned! Voice ID: {vid}")
-                    else:
-                        st.error("❌ Cloning failed. Check your API key or file format.")
-                else:
-                    st.warning("Upload an audio file and give your voice a name.")
-        with vc2:
-            if D.el_clone_id and st.button("🗑️ Delete Clone", use_container_width=True):
-                el_delete_voice(D.el_api_key, D.el_clone_id)
-                D.el_clone_id = None; D.el_clone_name = ""
-                D.el_voices = el_get_voices(D.el_api_key)
-                st.success("Deleted.")
-
-        if D.el_clone_id:
-            st.markdown(f'<div class="status-info">🟢 Active clone: <b>{D.el_clone_name}</b> · ID: <code>{D.el_clone_id}</code></div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-        # ── Section 2: Voice Browser ──────────────────────────────
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown('<p class="card-header">🎤 Voice Browser</p>', unsafe_allow_html=True)
-        categories = sorted(set(v["category"] for v in D.el_voices))
-        cat_filter = st.selectbox("Filter by category", ["All"] + categories)
-        search = st.text_input("Search voice name", placeholder="e.g. Nigerian, Pidgin, African...")
-        filtered_voices = D.el_voices
-        if cat_filter != "All": filtered_voices = [v for v in filtered_voices if v["category"] == cat_filter]
-        if search.strip(): filtered_voices = [v for v in filtered_voices if search.lower() in v["name"].lower()]
-        st.markdown(f"<p style='color:#555;font-size:12px'>{len(filtered_voices)} voices</p>", unsafe_allow_html=True)
-        vcols = st.columns(3)
-        for i, voice in enumerate(filtered_voices[:30]):
-            with vcols[i % 3]:
-                badge = "🟠" if voice["category"] == "cloned" else "🔵"
-                st.markdown(f'<div class="card-sm"><b style="color:#E8E8E8;font-size:13px">{badge} {voice["name"]}</b><br><span style="color:#555;font-size:11px">{voice["category"]}</span></div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-        # ── Section 3: Generate with ElevenLabs ──────────────────
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown('<p class="card-header">⚡ Generate with ElevenLabs</p>', unsafe_allow_html=True)
-        voice_options = {v["name"]: v["voice_id"] for v in D.el_voices}
-        # Put cloned voice first if exists
-        if D.el_clone_name and D.el_clone_name in voice_options:
-            voice_options = {D.el_clone_name: voice_options[D.el_clone_name], **{k:v for k,v in voice_options.items() if k != D.el_clone_name}}
-        el_voice_label = st.selectbox("Select Voice", list(voice_options.keys()), key="el_sel")
-        el_text = st.text_area("Text to generate", height=120, placeholder="Type your Pidgin or English script here...", key="el_txt")
-        elc1, elc2 = st.columns(2)
-        with elc1: el_stability = st.slider("Stability", 0.0, 1.0, 0.5, 0.05, help="Higher = more consistent, Lower = more expressive")
-        with elc2: el_similarity = st.slider("Clarity / Similarity", 0.0, 1.0, 0.8, 0.05, help="How closely to match the cloned voice")
-        el_model = st.selectbox("Model", ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_monolingual_v1"],
-                                 help="multilingual_v2 = best quality · turbo_v2_5 = fastest")
-
-        if st.button("⚡ Generate with ElevenLabs", use_container_width=True):
-            if el_text.strip():
-                el_out = "workspace/elevenlabs_output.mp3"
-                with st.spinner("Generating..."):
-                    ok = el_generate_tts(D.el_api_key, voice_options[el_voice_label],
-                                         el_text.strip(), el_out, el_model, el_stability, el_similarity)
-                if ok and os.path.exists(el_out):
-                    st.audio(el_out)
-                    dur = get_audio_duration(el_out)
-                    st.success(f"✅ Generated {dur:.1f}s of audio with '{el_voice_label}'")
-                    with open(el_out, "rb") as f:
-                        st.download_button("⬇️ Download", f, file_name="elevenlabs_output.mp3", mime="audio/mpeg")
-                    # Option to set as main audio
+    # ── Section 2: Generate Offline ──────────────────────────────
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown('<p class="card-header">⚡ Generate Voiceover</p>', unsafe_allow_html=True)
+    
+    if D.xtts_voice_ref:
+        xtts_text = st.text_area("Text to generate", height=120, placeholder="Type your Pidgin or English script here...", key="xtts_txt")
+        xtts_lang = st.selectbox("Language", ["en", "fr", "es", "de", "it", "pt", "pl", "tr", "ru", "nl", "cs", "ar", "zh", "ja", "hu", "ko"])
+        
+        if st.button("⚡ Generate Offline (Local CPU/GPU)", use_container_width=True):
+            if xtts_text.strip():
+                out_path = "workspace/xtts_output.wav"
+                
+                with st.spinner("Loading AI Model & Synthesizing Audio (may take 1-3 mins on CPU)..."):
+                    tts = load_xtts_model()
+                    tts.tts_to_file(
+                        text=xtts_text.strip(),
+                        speaker_wav=D.xtts_voice_ref,
+                        language=xtts_lang,
+                        file_path=out_path
+                    )
+                    
+                if os.path.exists(out_path):
+                    st.audio(out_path)
+                    st.success(f"✅ Voiceover generated locally with '{D.xtts_voice_name}'!")
+                    with open(out_path, "rb") as f:
+                        st.download_button("⬇️ Download Audio", f, file_name="xtts_output.wav", mime="audio/wav")
+                    
                     if st.button("📌 Use as Main Voiceover"):
-                        D.full_audio = el_out
+                        D.full_audio = out_path
                         st.success("Set as main voiceover! Go to Preview tab.")
-                else:
-                    st.error("❌ Generation failed. Check your character limit or API key.")
             else:
                 st.warning("Enter some text first.")
-        st.markdown('</div>', unsafe_allow_html=True)
     else:
-        st.markdown('<div class="status-info">🔑 Connect your ElevenLabs API key above to get started.</div>', unsafe_allow_html=True)
+        st.info("Upload a voice reference above to start generating offline.")
+        
+    st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown("---")
-st.markdown('<div style="text-align:center;padding:12px;color:#444;font-size:11px"><b style="color:#FF6B35">VoxCraft Studio</b> · Edge TTS + ElevenLabs · 70+ Voices · 15 Languages · Clone Studio</div>', unsafe_allow_html=True)
+st.markdown('<div style="text-align:center;padding:12px;color:#444;font-size:11px"><b style="color:#FF6B35">VoxCraft Studio</b> · Fully Offline AI Voice Engine</div>', unsafe_allow_html=True)
