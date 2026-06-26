@@ -63,15 +63,7 @@ def stitch_audio_files(file_paths, output_path):
         if os.path.exists(list_path):
             os.remove(list_path)
 
-def normalize_audio(input_path, output_path):
-    cmd = [_ffmpeg_exe, "-i", input_path, "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-y", output_path]
-    subprocess.run(cmd, capture_output=True, timeout=60)
 
-def mix_audio_with_music(voice_path, music_path, output_path, music_vol=0.15):
-    cmd = [_ffmpeg_exe, "-i", voice_path, "-i", music_path,
-           "-filter_complex", f"[1:a]volume={music_vol}[m];[0:a][m]amix=inputs=2:duration=first[out]",
-           "-map", "[out]", "-y", output_path]
-    subprocess.run(cmd, capture_output=True, timeout=120)
 
 def export_video_with_audio(audio_path, output_path, duration):
     """Create a simple waveform video with the audio baked in."""
@@ -144,25 +136,7 @@ def apply_pronunciation(text, pron_dict):
 def insert_ssml_pause(text, position, duration_ms=500):
     return text[:position] + f" ... " + text[position:]
 
-# ── Background Music Generator ──
-def generate_ambient_music(duration_sec, style="cinematic", output_path="workspace/bg_music.mp3"):
-    """Generate audible and pleasant ambient background music using ffmpeg synthesis."""
-    d = int(duration_sec) + 2
-    # Define styles with richer synthesis (ambient pads)
-    styles = {
-        "cinematic": f"anoisesrc=d={d}:c=pink:a=0.1,lowpass=f=100[n];sine=f=60:d={d},volume=0.5[b];sine=f=120:d={d},volume=0.2[s1];[n][b][s1]amix=inputs=3[out]",
-        "calm": f"anoisesrc=d={d}:c=pink:a=0.05,lowpass=f=300[n];sine=f=220:d={d},volume=0.1[s1];sine=f=330:d={d},volume=0.08[s2];[n][s1][s2]amix=inputs=3[out]",
-        "energetic": f"sine=f=80:d={d},volume=0.4[b];sine=f=300:d={d}:beat=4,volume=0.2[s];[b][s]amix=inputs=2,aecho=0.8:0.8:500:0.3[out]",
-        "mysterious": f"anoisesrc=d={d}:c=brown:a=0.1,lowpass=f=80[n];sine=f=45:d={d},volume=0.6[b];sine=f=110:d={d},volume=0.2,tremolo=f=4:d=0.6[s];[n][b][s]amix=inputs=3[out]",
-        "inspiring": f"sine=f=130:d={d},volume=0.2[s1];sine=f=165:d={d},volume=0.2[s2];sine=f=196:d={d},volume=0.2[s3];[s1][s2][s3]amix=inputs=3,aecho=0.8:0.8:1000:0.4[out]",
-        "ambient": f"anoisesrc=d={d}:c=pink:a=0.08,lowpass=f=200[n];sine=f=75:d={d},volume=0.2[s];[n][s]amix=inputs=2[out]",
-    }
-    filt = styles.get(style, styles["cinematic"])
-    cmd = [_ffmpeg_exe, "-f", "lavfi", "-i", f"anullsrc=r=44100:cl=stereo", 
-           "-filter_complex", filt, "-map", "[out]",
-           "-t", str(d), "-c:a", "libmp3lame", "-q:a", "4", "-y", output_path]
-    subprocess.run(cmd, capture_output=True, timeout=120)
-    return output_path
+
 
 # ── Voice Database (Multi-Language) ──
 VOICES = {
@@ -255,85 +229,7 @@ VOICES = {
     "🇸🇪 Sofie (Swedish F)": "sv-SE-SofieNeural",
 }
 
-# ── ElevenLabs Integration ──────────────────────────────────────────────────
-EL_BASE = "https://api.elevenlabs.io/v1"
 
-def el_headers(api_key):
-    return {"xi-api-key": api_key, "Accept": "application/json"}
-
-def el_get_voices(api_key):
-    """Return list of {voice_id, name, category, preview_url} dicts."""
-    try:
-        import requests, warnings; warnings.filterwarnings("ignore")
-        r = requests.get(f"{EL_BASE}/voices", headers=el_headers(api_key), verify=False, timeout=15)
-        if r.status_code == 200:
-            voices = r.json().get("voices", [])
-            return [{"voice_id": v["voice_id"], "name": v["name"],
-                     "category": v.get("category","premade"),
-                     "preview_url": v.get("preview_url","")} for v in voices]
-        return []
-    except Exception:
-        return []
-
-def el_get_subscription(api_key):
-    """Return remaining character count for the free tier."""
-    try:
-        import requests, warnings; warnings.filterwarnings("ignore")
-        r = requests.get(f"{EL_BASE}/user/subscription", headers=el_headers(api_key), verify=False, timeout=15)
-        if r.status_code == 200:
-            d = r.json()
-            used = d.get("character_count", 0)
-            limit = d.get("character_limit", 10000)
-            return used, limit
-        return None, None
-    except Exception:
-        return None, None
-
-def el_clone_voice(api_key, name, audio_path, description="Cloned via VoxCraft Studio"):
-    """Upload audio and create an Instant Voice Clone. Returns voice_id or None."""
-    try:
-        import requests, warnings; warnings.filterwarnings("ignore")
-        with open(audio_path, "rb") as f:
-            files = [("files", (os.path.basename(audio_path), f, "audio/mpeg"))]
-            data = {"name": name, "description": description}
-            r = requests.post(f"{EL_BASE}/voices/add",
-                              headers={"xi-api-key": api_key},
-                              data=data, files=files, verify=False, timeout=60)
-        if r.status_code == 200:
-            return r.json().get("voice_id")
-        return None
-    except Exception as e:
-        return None
-
-def el_delete_voice(api_key, voice_id):
-    try:
-        import requests, warnings; warnings.filterwarnings("ignore")
-        requests.delete(f"{EL_BASE}/voices/{voice_id}", headers=el_headers(api_key), verify=False, timeout=15)
-    except Exception:
-        pass
-
-def el_generate_tts(api_key, voice_id, text, output_path,
-                    model_id="eleven_multilingual_v2", stability=0.5, similarity=0.8):
-    """Generate TTS via ElevenLabs and save to output_path. Returns True on success."""
-    try:
-        import requests, warnings; warnings.filterwarnings("ignore")
-        payload = {
-            "text": text,
-            "model_id": model_id,
-            "voice_settings": {"stability": stability, "similarity_boost": similarity}
-        }
-        hdrs = {**el_headers(api_key), "Content-Type": "application/json"}
-        r = requests.post(f"{EL_BASE}/text-to-speech/{voice_id}",
-                          headers=hdrs, json=payload, verify=False, timeout=120, stream=True)
-        if r.status_code == 200:
-            with open(output_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=4096):
-                    if chunk:
-                        f.write(chunk)
-            return True
-        return False
-    except Exception:
-        return False
 TEMPLATES = {
     "YouTube Intro": "Hey everyone, welcome back to the channel!\n\nIn today's video, we're going to dive deep into something really exciting. I've been working on this for weeks, and I can't wait to share it with you.\n\nSo grab your coffee, sit back, and let's get into it.",
     "Documentary": "In the heart of an untamed wilderness, a story unfolds that has remained hidden for centuries.\n\nScientists have long debated the origins of this phenomenon. But recent discoveries have shattered everything we thought we knew.\n\nWhat they found would change the course of history forever.",
